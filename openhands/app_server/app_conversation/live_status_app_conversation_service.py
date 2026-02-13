@@ -348,7 +348,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             info = ConversationInfo.model_validate(response.json())
 
             # Store info...
-            user_id = await self.user_context.get_user_id()
+            # Reuse user_id from task instead of calling user_context.get_user_id()
+            # By this point, the HTTP request context is closed (running in background task)
+            # so user_context.get_user_id() would return None
+            user_id = task.created_by_user_id
             app_conversation_info = AppConversationInfo(
                 id=info.id,
                 title=f'Conversation {info.id.hex[:5]}',
@@ -688,17 +691,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             # First try to find a running sandbox for the current user
             sandbox = await self._find_running_sandbox_for_user()
             if sandbox is None:
-                # No running sandbox found, start a new one
+                # Ensure conversation_id exists before sandbox creation
+                # This is needed for OpenResty dynamic routing to work correctly
+                # The container label needs to match the URL format: /runtime/{conversation_id.hex}/{port}/
+                if task.request.conversation_id is None:
+                    from uuid import uuid4
 
-                # Convert conversation_id to hex string if present
-                sandbox_id_str = (
-                    task.request.conversation_id.hex
-                    if task.request.conversation_id is not None
-                    else None
-                )
-
+                    task.request.conversation_id = uuid4()
+                sandbox_id_str = task.request.conversation_id.hex
                 sandbox = await self.sandbox_service.start_sandbox(
-                    sandbox_id=sandbox_id_str
+                    sandbox_id=sandbox_id_str,
                 )
             task.sandbox_id = sandbox.id
         else:
@@ -718,7 +720,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     sandbox_id_for_start = sandbox_id_for_start[len(prefix):]
                 sandbox = await self.sandbox_service.start_sandbox(
                     sandbox_id=sandbox_id_for_start,
-                    user_id=task.created_by_user_id,
                 )
                 task.sandbox_id = sandbox.id
                 task.request.sandbox_id = sandbox.id
