@@ -510,9 +510,28 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 from uuid import uuid4
                 task.request.conversation_id = uuid4()
             sandbox_id_str = task.request.conversation_id.hex
+            # User secrets injection - resolve secrets for sandbox env vars
+            user_env_vars = {}
+            if task.created_by_user_id:
+                try:
+                    from user_config_loader import UserConfigLoader
+                    loader = UserConfigLoader(task.created_by_user_id)
+                    user_mcp = loader.get_mcp_config()
+                    if user_mcp:
+                        for server in user_mcp.get('stdio_servers', []):
+                            if server.get('enabled', True):
+                                env = server.get('env', {})
+                                resolved = loader.resolve_secret_refs(env)
+                                user_env_vars.update(resolved)
+                except ImportError:
+                    _logger.debug("user_config_loader not available, skipping secrets injection")
+                except Exception as e:
+                    _logger.warning(f"Failed to load user secrets: {e}")
+
             sandbox = await self.sandbox_service.start_sandbox(
                 sandbox_id=sandbox_id_str,
                 user_id=task.created_by_user_id,  # Pass user_id for container label
+                user_env_vars=user_env_vars,  # User secrets for MCP servers
             )
             task.sandbox_id = sandbox.id
         else:
