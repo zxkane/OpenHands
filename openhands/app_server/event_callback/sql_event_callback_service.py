@@ -7,7 +7,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from typing import AsyncGenerator
-from uuid import UUID
+from uuid import uuid4,  UUID
 
 from fastapi import Request
 from sqlalchemy import UUID as SQLUUID
@@ -46,7 +46,7 @@ _logger = logging.getLogger(__name__)
 
 class StoredEventCallback(Base):  # type: ignore
     __tablename__ = 'event_callback'
-    id = Column(SQLUUID, primary_key=True)
+    id = Column(SQLUUID, primary_key=True, default=uuid4)  # Auto-generate UUID
     conversation_id = Column(SQLUUID, nullable=True)
     status = Column(
         Enum(EventCallbackStatus), nullable=False, default=EventCallbackStatus.ACTIVE
@@ -59,7 +59,7 @@ class StoredEventCallback(Base):  # type: ignore
 
 class StoredEventCallbackResult(Base):  # type: ignore
     __tablename__ = 'event_callback_result'
-    id = Column(SQLUUID, primary_key=True)
+    id = Column(SQLUUID, primary_key=True, default=uuid4)  # Auto-generate UUID
     status = Column(Enum(EventCallbackResultStatus), nullable=True)
     event_callback_id = Column(SQLUUID, index=True)
     event_id = Column(String, index=True)
