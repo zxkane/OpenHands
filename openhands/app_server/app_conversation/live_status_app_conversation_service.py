@@ -295,7 +295,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             info = ConversationInfo.model_validate(response.json())
 
             # Store info...
-            user_id = await self.user_context.get_user_id()
+            # Reuse user_id from task instead of calling user_context.get_user_id()
+            # By this point, the HTTP request context is closed (running in background task)
+            # so user_context.get_user_id() would return None
+            user_id = task.created_by_user_id
             app_conversation_info = AppConversationInfo(
                 id=info.id,
                 title=f'Conversation {info.id.hex[:5]}',
@@ -495,14 +498,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         """Wait for sandbox to start and return info."""
         # Get or create the sandbox
         if not task.request.sandbox_id:
-            # Convert conversation_id to hex string if present
-            sandbox_id_str = (
-                task.request.conversation_id.hex
-                if task.request.conversation_id is not None
-                else None
-            )
+            # Ensure conversation_id exists before sandbox creation
+            # This is needed for OpenResty dynamic routing to work correctly
+            # The container label needs to match the URL format: /runtime/{conversation_id.hex}/{port}/
+            if task.request.conversation_id is None:
+                from uuid import uuid4
+                task.request.conversation_id = uuid4()
+            sandbox_id_str = task.request.conversation_id.hex
             sandbox = await self.sandbox_service.start_sandbox(
-                sandbox_id=sandbox_id_str
+                sandbox_id=sandbox_id_str,
+                user_id=task.created_by_user_id,  # Pass user_id for container label
             )
             task.sandbox_id = sandbox.id
         else:
