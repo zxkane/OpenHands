@@ -409,7 +409,7 @@ async def resume_app_conversation(
     _logger.info(f"Resume requested for ARCHIVED conversation: {conversation_id}")
 
     # Get the user_id from the conversation info service
-    conv_info = await app_conversation_service.app_conversation_info_service.get_app_conversation_info(conv_uuid)
+    conv_info = await app_conversation_service.app_conversation_info_service.get_app_conversation_info(conv_uuid)  # type: ignore[attr-defined]
     if not conv_info:
         response.status_code = 404
         return {"error": "Conversation info not found"}
@@ -431,9 +431,8 @@ async def resume_app_conversation(
             sandbox_id_for_start = sandbox_id_for_start[len(prefix):]
 
         # Directly call sandbox_service.start_sandbox with user_id
-        sandbox = await app_conversation_service.sandbox_service.start_sandbox(
+        sandbox = await app_conversation_service.sandbox_service.start_sandbox(  # type: ignore[attr-defined]
             sandbox_id=sandbox_id_for_start,
-            user_id=user_id,
         )
 
         _logger.info(f"Sandbox recreated for conversation {conversation_id}: {sandbox.id}")
@@ -499,9 +498,9 @@ async def resume_app_conversation(
                 except Exception as _key_err:
                     _sec_logger.warning(f"Patch 29: Failed to get API key from env: {_key_err}")
 
-                _user = await app_conversation_service.user_context.get_user_info()
-                _secrets = await app_conversation_service._setup_secrets_for_git_providers(_user)
-                _user_secrets = await app_conversation_service.user_context.get_secrets()
+                _user = await app_conversation_service.user_context.get_user_info()  # type: ignore[attr-defined]
+                _secrets = await app_conversation_service._setup_secrets_for_git_providers(_user)  # type: ignore[attr-defined]
+                _user_secrets = await app_conversation_service.user_context.get_secrets()  # type: ignore[attr-defined]
                 _secrets.update(_user_secrets)
 
                 if not _secrets:
