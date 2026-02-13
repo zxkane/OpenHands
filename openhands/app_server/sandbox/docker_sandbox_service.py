@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -362,6 +363,13 @@ class DockerSandboxService(SandboxService):
         env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
         )
+        # Webhook headers for authentication
+        # Agent-server needs X-Session-API-Key header when calling back to openhands-app
+        env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
+        # Fix git "dubious ownership" error for EFS-persisted workspaces
+        # When workspace files are created by one user (ec2-user on host) but accessed by
+        # another user (inside container), git fails with "dubious ownership" error.
+        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" 
 
         # Set CORS origins for remote browser access when web_url is configured.
         # This allows the agent-server container to accept requests from the
@@ -388,6 +396,7 @@ class DockerSandboxService(SandboxService):
         # Prepare labels
         labels = {
             'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Enable OpenResty dynamic routing
             'user_id': user_id,  # Enable cross-user authorization
         }
 
