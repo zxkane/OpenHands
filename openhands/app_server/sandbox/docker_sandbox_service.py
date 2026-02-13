@@ -324,7 +324,7 @@ class DockerSandboxService(SandboxService):
             return None
 
     async def start_sandbox(
-        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None, user_env_vars: dict | None = None
     ) -> SandboxInfo:
         """Start a new sandbox."""
         # Warn about port collision risk when using host network mode with multiple sandboxes
@@ -369,7 +369,20 @@ class DockerSandboxService(SandboxService):
         # Fix git "dubious ownership" error for EFS-persisted workspaces
         # When workspace files are created by one user (ec2-user on host) but accessed by
         # another user (inside container), git fails with "dubious ownership" error.
-        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" 
+        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'"
+        # Inject runtime_startup_env_vars (including OH_SECRET_KEY)
+        # This ensures sandbox containers can decrypt secrets in base_state.json
+        # when resuming conversations after EC2 replacement
+        try:
+            from openhands.core.config import load_openhands_config
+            oh_config = load_openhands_config()
+            if hasattr(oh_config, 'sandbox') and hasattr(oh_config.sandbox, 'runtime_startup_env_vars'):
+                runtime_env = oh_config.sandbox.runtime_startup_env_vars
+                if runtime_env:
+                    env_vars.update(runtime_env)
+                    _logger.info(f"Injected {len(runtime_env)} runtime_startup_env_vars into sandbox")
+        except Exception as e:
+            _logger.warning(f"Failed to inject runtime_startup_env_vars: {e}")
 
         # Set CORS origins for remote browser access when web_url is configured.
         # This allows the agent-server container to accept requests from the
