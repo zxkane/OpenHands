@@ -186,12 +186,16 @@ class DbSessionInjector(BaseModel, Injector[async_sessionmaker]):
                 url = f'sqlite+aiosqlite:///{str(self.persistence_dir)}/openhands.db'
 
             if self.host:
-                async_engine = create_async_engine(
+                                import os as _db_os
+                _db_ssl = _db_os.getenv('DB_SSL', '')
+                _connect_args = {'ssl': 'require'} if _db_ssl else {}
+async_engine = create_async_engine(
                     url,
                     pool_size=self.pool_size,
                     max_overflow=self.max_overflow,
                     pool_recycle=self.pool_recycle,
                     pool_pre_ping=True,
+                    connect_args=_connect_args,  # SSL required for Aurora IAM auth (env-gated)
                 )
             else:
                 async_engine = create_async_engine(
