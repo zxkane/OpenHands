@@ -48,7 +48,7 @@ _logger = logging.getLogger(__name__)
 class StoredEventCallback(Base):
     __tablename__ = 'event_callback'
 
-    id: Mapped[UUID] = mapped_column(primary_key=True)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     conversation_id: Mapped[UUID | None] = mapped_column(nullable=True)
     status: Mapped[EventCallbackStatus] = mapped_column(
         Enum(EventCallbackStatus), nullable=False, default=EventCallbackStatus.ACTIVE
