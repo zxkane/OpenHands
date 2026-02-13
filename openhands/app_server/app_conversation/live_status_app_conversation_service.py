@@ -322,14 +322,29 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 f'Sending StartConversationRequest with hook_config: '
                 f'{hook_config_in_request}'
             )
-            response = await self.httpx_client.post(
-                f'{agent_server_url}/api/conversations',
-                json=body_json,
-                headers={'X-Session-API-Key': sandbox.session_api_key},
-                timeout=self.sandbox_startup_timeout,
-            )
-
-            response.raise_for_status()
+            # Retry logic for race condition where agent-server returns 500 before fully initialized
+            max_retries = 5
+            retry_delay = 2.0
+            for attempt in range(max_retries):
+                try:
+                    response = await self.httpx_client.post(
+                        f'{agent_server_url}/api/conversations',
+                        json=body_json,
+                        headers={'X-Session-API-Key': sandbox.session_api_key},
+                        timeout=self.sandbox_startup_timeout,
+                    )
+                    response.raise_for_status()
+                    break  # Success
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        _logger.warning(
+                            f'Conversation creation failed (attempt {attempt + 1}), '
+                            f'retrying in {retry_delay}s: {e}'
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                    else:
+                        raise
             info = ConversationInfo.model_validate(response.json())
 
             # Store info...
