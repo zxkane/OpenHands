@@ -46,7 +46,7 @@ _logger = logging.getLogger(__name__)
 
 class StoredEventCallback(Base):  # type: ignore
     __tablename__ = 'event_callback'
-    id = Column(SQLUUID, primary_key=True)
+    id = Column(SQLUUID, primary_key=True, default=uuid4)  # Auto-generate UUID
     conversation_id = Column(SQLUUID, nullable=True)
     status = Column(
         Enum(EventCallbackStatus), nullable=False, default=EventCallbackStatus.ACTIVE
