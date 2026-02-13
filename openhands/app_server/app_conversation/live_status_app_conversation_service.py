@@ -367,14 +367,32 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             )
             is_acp = isinstance(start_conversation_request, StartACPConversationRequest)
             router_path = 'acp/conversations' if is_acp else 'conversations'
-            response = await self.httpx_client.post(
-                f'{agent_server_url}/api/{router_path}',
-                json=body_json,
-                headers=headers,
-                timeout=self.sandbox_startup_timeout,
-            )
 
-            response.raise_for_status()
+            # Retry logic for race condition where agent-server returns 500
+            # before fully initialized
+            max_retries = 5
+            retry_delay = 2.0
+            for attempt in range(max_retries):
+                try:
+                    response = await self.httpx_client.post(
+                        f'{agent_server_url}/api/{router_path}',
+                        json=body_json,
+                        headers=headers,
+                        timeout=self.sandbox_startup_timeout,
+                    )
+                    response.raise_for_status()
+                    break  # Success
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        _logger.warning(
+                            f'Conversation creation failed (attempt {attempt + 1}), '
+                            f'retrying in {retry_delay}s: {e}'
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                    else:
+                        raise
+
             if is_acp:
                 info = ACPConversationInfo.model_validate(response.json())
                 agent_kind = 'acp'
