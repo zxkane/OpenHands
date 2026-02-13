@@ -116,9 +116,8 @@ async def valid_conversation(
             sandbox_id=sandbox_info.id,
             created_by_user_id=sandbox_info.created_by_user_id,
         )
-
-    # Sanity check - Make sure that the conversation and sandbox were created by the same user
-    if app_conversation_info.created_by_user_id != sandbox_info.created_by_user_id:
+    if sandbox_info.created_by_user_id is not None and app_conversation_info.created_by_user_id != sandbox_info.created_by_user_id:
+        # Make sure that the conversation and sandbox were created by the same user
         raise AuthError()
 
     return app_conversation_info
@@ -144,7 +143,7 @@ async def on_conversation_update(
         id=conversation_info.id,
         title=existing.title or f'Conversation {conversation_info.id.hex}',
         sandbox_id=sandbox_info.id,
-        created_by_user_id=sandbox_info.created_by_user_id,
+        created_by_user_id=existing.created_by_user_id or sandbox_info.created_by_user_id,
         llm_model=conversation_info.agent.llm.model,
         # Git parameters
         selected_repository=existing.selected_repository,
