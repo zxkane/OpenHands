@@ -390,14 +390,22 @@ class DockerSandboxService(SandboxService):
             'sandbox_spec_id': sandbox_spec.id,
         }
 
-        # Prepare volumes
-        volumes = {
-            mount.host_path: {
+        # Per-sandbox workspace mount (patched by openhands-infra): treat mount.host_path as a base dir for /workspace
+        volumes = {}
+        for mount in self.mounts:
+            host_path = mount.host_path
+            if mount.container_path == '/workspace':
+                import os as _os
+                host_path = _os.path.join(host_path, sandbox_id)
+                _os.makedirs(host_path, exist_ok=True)
+                try:
+                    _os.chmod(host_path, 0o777)
+                except Exception:
+                    pass
+            volumes[host_path] = {
                 'bind': mount.container_path,
                 'mode': mount.mode,
             }
-            for mount in self.mounts
-        }
 
         # Determine network mode
         network_mode = 'host' if self.use_host_network else None
