@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pydantic import (
+    ValidationError,
     BaseModel,
     ConfigDict,
     Field,
@@ -130,8 +131,8 @@ class Secrets(BaseModel):
                         converted_tokens[provider_type] = ProviderToken.from_value(
                             value
                         )
-                    except ValueError:
-                        # Skip invalid provider types or tokens
+                    except (ValueError, ValidationError, TypeError):
+                        # Skip invalid provider tokens (masked with null value during resume)
                         continue
 
                 # Convert to MappingProxyType
@@ -146,7 +147,7 @@ class Secrets(BaseModel):
                 for key, value in secrets.items():
                     try:
                         converted_secrets[key] = CustomSecret.from_value(value)
-                    except ValueError:
+                    except (ValueError, ValidationError, TypeError):  # Skip invalid secrets during resume
                         continue
 
                 new_data['custom_secrets'] = MappingProxyType(converted_secrets)
