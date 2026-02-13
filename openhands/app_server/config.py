@@ -137,6 +137,7 @@ def config_from_env() -> AppServerConfig:
     from openhands.app_server.app_conversation.sql_app_conversation_info_service import (  # noqa: E501
         SQLAppConversationInfoServiceInjector,
     )
+    from openhands.app_server.app_conversation.cognito_sql_conversation_info_service import CognitoSQLAppConversationInfoServiceInjector
     from openhands.app_server.app_conversation.sql_app_conversation_start_task_service import (  # noqa: E501
         SQLAppConversationStartTaskServiceInjector,
     )
@@ -243,7 +244,7 @@ def config_from_env() -> AppServerConfig:
             config.sandbox_spec = DockerSandboxSpecServiceInjector()
 
     if config.app_conversation_info is None:
-        config.app_conversation_info = SQLAppConversationInfoServiceInjector()
+        config.app_conversation_info = CognitoSQLAppConversationInfoServiceInjector()  # Multi-tenant isolation
 
     if config.app_conversation_start_task is None:
         config.app_conversation_start_task = (
