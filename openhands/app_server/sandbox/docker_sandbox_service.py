@@ -323,7 +323,7 @@ class DockerSandboxService(SandboxService):
             return None
 
     async def start_sandbox(
-        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
     ) -> SandboxInfo:
         """Start a new sandbox."""
         # Warn about port collision risk when using host network mode with multiple sandboxes
@@ -388,6 +388,7 @@ class DockerSandboxService(SandboxService):
         # Prepare labels
         labels = {
             'sandbox_spec_id': sandbox_spec.id,
+            'user_id': user_id,  # Enable cross-user authorization
         }
 
         # Per-sandbox workspace mount (patched by openhands-infra): treat mount.host_path as a base dir for /workspace
