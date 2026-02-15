@@ -530,8 +530,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
             sandbox = await self.sandbox_service.start_sandbox(
                 sandbox_id=sandbox_id_str,
-                user_id=task.created_by_user_id,  # Pass user_id for container label
-                user_env_vars=user_env_vars,  # User secrets for MCP servers
             )
             task.sandbox_id = sandbox.id
         else:
@@ -551,7 +549,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     sandbox_id_for_start = sandbox_id_for_start[len(prefix):]
                 sandbox = await self.sandbox_service.start_sandbox(
                     sandbox_id=sandbox_id_for_start,
-                    user_id=task.created_by_user_id,
                 )
                 task.sandbox_id = sandbox.id
                 task.request.sandbox_id = sandbox.id
