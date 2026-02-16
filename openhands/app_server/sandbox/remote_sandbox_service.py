@@ -455,8 +455,8 @@ class RemoteSandboxService(SandboxService):
             response.raise_for_status()
             runtime_data = response.json()
 
-            # Hack - result doesn't contain this
-            runtime_data['pod_status'] = 'pending'
+            # Use pod_status from orchestrator response (warm pool returns 'ready' instantly)
+            # runtime_data['pod_status'] = 'pending'  # Removed: orchestrator returns correct status
 
             return self._to_sandbox_info(stored_sandbox, runtime_data)
 
