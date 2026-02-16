@@ -235,6 +235,8 @@ def config_from_env() -> AppServerConfig:
             config.sandbox = RemoteSandboxServiceInjector(
                 api_key=os.environ['SANDBOX_API_KEY'],
                 api_url=os.environ['SANDBOX_REMOTE_RUNTIME_API_URL'],
+                start_sandbox_timeout=int(os.getenv('SANDBOX_START_TIMEOUT', '300')),
+                polling_interval=int(os.getenv('SANDBOX_POLLING_INTERVAL', '15')),
             )
         elif os.getenv('RUNTIME') in ('local', 'process'):
             config.sandbox = ProcessSandboxServiceInjector()
