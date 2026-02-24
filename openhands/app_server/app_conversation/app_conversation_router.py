@@ -371,21 +371,17 @@ async def resume_app_conversation(
     conversation_id: str,
     request: Request,
     response: Response,
+    db_session: AsyncSession = db_session_dependency,
+    httpx_client: httpx.AsyncClient = httpx_client_dependency,
     app_conversation_service: AppConversationService = app_conversation_service_dependency,
+    sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> dict:
-    '''Resume an ARCHIVED conversation by recreating its sandbox.
-
-    This endpoint triggers sandbox recreation for conversations that were archived
-    due to EC2 instance replacement. The sandbox will be recreated with the same
-    conversation_id and user_id labels, allowing the workspace to be reconnected.
-    '''
-    import logging
-    from uuid import UUID
+    '''Resume an ARCHIVED conversation by recreating its sandbox and registering with agent-server.'''
     _logger = logging.getLogger(__name__)
 
     conv_uuid = UUID(conversation_id)
 
-    # Get the conversation info to check status and get user_id
+    # Get the conversation info to check status
     conversations = await app_conversation_service.batch_get_app_conversations([conv_uuid])
     if not conversations or not conversations[0]:
         response.status_code = 404
@@ -393,14 +389,12 @@ async def resume_app_conversation(
 
     conv = conversations[0]
 
-    # Only resume ARCHIVED conversations (sandbox is MISSING)
-    from openhands.app_server.sandbox.sandbox_models import SandboxStatus
     if conv.sandbox_status != SandboxStatus.MISSING:
         return {"status": "ok", "message": "Conversation is not archived", "sandbox_status": str(conv.sandbox_status)}
 
     _logger.info(f"Resume requested for ARCHIVED conversation: {conversation_id}")
 
-    # Get the user_id from the conversation info service
+    # Get conversation metadata
     conv_info = await app_conversation_service.app_conversation_info_service.get_app_conversation_info(conv_uuid)  # type: ignore[attr-defined]
     if not conv_info:
         response.status_code = 404
@@ -416,111 +410,39 @@ async def resume_app_conversation(
     _logger.info(f"Recreating sandbox {sandbox_id} for user {user_id}")
 
     try:
-        # Strip the oh-agent-server- prefix if present
+        # Strip prefix if present
         sandbox_id_for_start = sandbox_id
         prefix = 'oh-agent-server-'
         if sandbox_id_for_start.startswith(prefix):
             sandbox_id_for_start = sandbox_id_for_start[len(prefix):]
 
-        # Directly call sandbox_service.start_sandbox with user_id
-        sandbox = await app_conversation_service.sandbox_service.start_sandbox(  # type: ignore[attr-defined]
+        # Recreate the sandbox
+        sandbox = await sandbox_service.start_sandbox(
             sandbox_id=sandbox_id_for_start,
         )
 
         _logger.info(f"Sandbox recreated for conversation {conversation_id}: {sandbox.id}")
 
-        # Patch 29: Re-inject secrets into recreated sandbox
-        # Resumed conversations have masked secrets in persisted state.
-        # We re-inject fresh secrets via the sandbox's POST /api/conversations/{conv_id}/secrets endpoint.
-        try:
-            import asyncio as _asyncio
+        # Keep DB and HTTP connections open for background task
+        set_db_session_keep_open(request.state, True)
+        set_httpx_client_keep_open(request.state, True)
 
-            async def _reinject_secrets():
-                """Background task to re-inject secrets after sandbox is ready."""
-                import httpx
-                import docker
-                _sec_logger = logging.getLogger(__name__)
+        async def _register_and_cleanup():
+            """Background task: register conversation with agent-server."""
+            try:
+                await app_conversation_service.resume_conversation(  # type: ignore[attr-defined]
+                    conversation_id=conv_uuid,
+                    sandbox_id=sandbox.id,
+                    user_id=user_id,
+                )
+                _logger.info(f"Conversation {conversation_id} fully resumed")
+            except Exception as e:
+                _logger.exception(f"Failed to register resumed conversation {conversation_id}: {e}")
+            finally:
+                await db_session.close()
+                await httpx_client.aclose()
 
-                _conv_id_hex = conversation_id.replace('-', '')
-                _container_name = f'oh-agent-server-{_conv_id_hex}'
-                _sandbox_port = None
-                _api_key = None
-
-                try:
-                    _docker_client = docker.from_env()
-                    _container = _docker_client.containers.get(_container_name)
-                    _ports = _container.attrs.get('NetworkSettings', {}).get('Ports', {})
-                    _port_bindings = _ports.get('8000/tcp', [])
-                    if _port_bindings:
-                        _sandbox_port = _port_bindings[0].get('HostPort')
-                    _sec_logger.info(f"Patch 29: Found sandbox container {_container_name} on port {_sandbox_port}")
-                except Exception as _docker_err:
-                    _sec_logger.warning(f"Patch 29: Docker lookup failed: {_docker_err}")
-                    return
-
-                if not _sandbox_port:
-                    _sec_logger.warning(f"Patch 29: No port mapping found for {_container_name}")
-                    return
-
-                _sandbox_url = f'http://host.docker.internal:{_sandbox_port}'
-
-                _healthy = False
-                async with httpx.AsyncClient(timeout=10) as _health_client:
-                    for _attempt in range(36):
-                        try:
-                            _health_resp = await _health_client.get(f'{_sandbox_url}/health')
-                            if _health_resp.status_code == 200:
-                                _healthy = True
-                                _sec_logger.info(f"Patch 29: Sandbox healthy after {(_attempt + 1) * 5}s")
-                                break
-                        except Exception:
-                            pass
-                        await _asyncio.sleep(5)
-
-                if not _healthy:
-                    _sec_logger.warning(f"Patch 29: Sandbox not healthy after 180s, skipping secret re-injection")
-                    return
-
-                try:
-                    _env_list = _container.attrs.get('Config', {}).get('Env', [])
-                    for _env_item in _env_list:
-                        if _env_item.startswith('OH_SESSION_API_KEYS_0='):
-                            _api_key = _env_item.split('=', 1)[1]
-                            break
-                except Exception as _key_err:
-                    _sec_logger.warning(f"Patch 29: Failed to get API key from env: {_key_err}")
-
-                _user = await app_conversation_service.user_context.get_user_info()  # type: ignore[attr-defined]
-                _secrets = await app_conversation_service._setup_secrets_for_git_providers(_user)  # type: ignore[attr-defined]
-                _user_secrets = await app_conversation_service.user_context.get_secrets()  # type: ignore[attr-defined]
-                _secrets.update(_user_secrets)
-
-                if not _secrets:
-                    _sec_logger.info("Patch 29: No secrets to inject for this user")
-                    return
-
-                _secret_data = {}
-                for _name, _secret_val in _secrets.items():
-                    _secret_data[_name] = _secret_val.model_dump(mode='json', context={'expose_secrets': True})
-
-                _headers = {}
-                if _api_key:
-                    _headers['X-Session-API-Key'] = _api_key
-                async with httpx.AsyncClient(timeout=30) as _client:
-                    _resp = await _client.post(
-                        f'{_sandbox_url}/api/conversations/{_conv_id_hex}/secrets',
-                        json={'secrets': _secret_data},
-                        headers=_headers,
-                    )
-                    if _resp.status_code in (200, 201, 204):
-                        _sec_logger.info(f"Patch 29: Re-injected {len(_secrets)} secrets into resumed sandbox {conversation_id}")
-                    else:
-                        _sec_logger.warning(f"Patch 29: Secret injection returned {_resp.status_code}: {_resp.text[:200]}")
-
-            _asyncio.create_task(_reinject_secrets())
-
-        except Exception as _sec_err:
-            _logger.warning(f"Patch 29: Secret re-injection setup failed (non-fatal): {_sec_err}")
+        asyncio.create_task(_register_and_cleanup())
 
         return {"status": "ok", "sandbox_id": sandbox.id}
     except Exception as e:
