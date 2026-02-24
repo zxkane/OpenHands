@@ -420,6 +420,112 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             task.detail = str(exc)
             yield task
 
+    async def resume_conversation(
+        self,
+        conversation_id: UUID,
+        sandbox_id: str,
+        user_id: str,
+    ) -> ConversationInfo:
+        """Resume an archived conversation by registering it with the agent-server.
+
+        After the sandbox has been recreated (via orchestrator /resume), this method:
+        1. Waits for sandbox to be RUNNING
+        2. Builds a StartConversationRequest with current user settings
+        3. POSTs to agent-server /api/conversations to register the conversation
+        4. Sets up event callbacks
+
+        Args:
+            conversation_id: UUID of the conversation to resume
+            sandbox_id: ID of the recreated sandbox
+            user_id: ID of the user resuming the conversation
+        """
+        # Wait for sandbox to be running
+        await self.sandbox_service.wait_for_sandbox_running(
+            sandbox_id,
+            timeout=self.sandbox_startup_timeout,
+            poll_interval=self.sandbox_startup_poll_frequency,
+            httpx_client=self.httpx_client,
+        )
+
+        # Get sandbox info and agent-server URL
+        sandbox = await self.sandbox_service.get_sandbox(sandbox_id)
+        assert sandbox is not None, f'Sandbox {sandbox_id} not found after resume'
+        agent_server_url = self._get_agent_server_url(sandbox)
+
+        # Get sandbox spec for working directory
+        sandbox_spec = await self.sandbox_spec_service.get_sandbox_spec(
+            sandbox.sandbox_spec_id
+        )
+        assert sandbox_spec is not None, f'Sandbox spec {sandbox.sandbox_spec_id} not found'
+
+        # Build the conversation request with current user settings
+        start_conversation_request = (
+            await self._build_start_conversation_request_for_user(
+                sandbox,
+                initial_message=None,  # No initial message on resume
+                system_message_suffix=None,
+                git_provider=None,
+                working_dir=sandbox_spec.working_dir,
+                agent_type=AgentType.DEFAULT,
+                llm_model=None,  # Use current user default
+                conversation_id=conversation_id,
+                selected_repository=None,
+                plugins=None,
+            )
+        )
+
+        # Register conversation with agent-server (with retry logic)
+        body_json = start_conversation_request.model_dump(
+            mode='json', context={'expose_secrets': True}
+        )
+        max_retries = 5
+        retry_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                response = await self.httpx_client.post(
+                    f'{agent_server_url}/api/conversations',
+                    json=body_json,
+                    headers={'X-Session-API-Key': sandbox.session_api_key},
+                    timeout=self.sandbox_startup_timeout,
+                )
+                response.raise_for_status()
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    _logger.warning(
+                        f'Resume conversation registration failed (attempt {attempt + 1}), '
+                        f'retrying in {retry_delay}s: {e}'
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5
+                else:
+                    raise
+
+        info = ConversationInfo.model_validate(response.json())
+
+        # Set up event callbacks
+        processors = [SetTitleCallbackProcessor()]
+        for processor in processors:
+            await self.event_callback_service.save_event_callback(
+                EventCallback(
+                    conversation_id=info.id,
+                    processor=processor,
+                )
+            )
+
+        # Set security analyzer from settings
+        user = await self.user_context.get_user_info()
+        await self._set_security_analyzer_from_settings(
+            agent_server_url,
+            sandbox.session_api_key,
+            info.id,
+            user.security_analyzer,
+            self.httpx_client,
+        )
+
+        _logger.info(f'Conversation {conversation_id} resumed and registered with agent-server')
+        return info
+
     async def _build_app_conversations(
         self, app_conversation_infos: Sequence[AppConversationInfo | None]
     ) -> list[AppConversation | None]:
