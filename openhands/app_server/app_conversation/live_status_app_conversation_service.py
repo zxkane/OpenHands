@@ -620,6 +620,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             for conversation_info in conversation_infos:
                 conversation_info_by_id[conversation_info.id] = conversation_info
 
+        # Auto-register conversations with RUNNING sandboxes but no agent-server registration
+        await self._auto_register_missing_conversations(
+            app_conversation_infos, sandboxes_by_id, conversation_info_by_id
+        )
+
         # Build app_conversation from info
         result = [
             (
@@ -646,11 +651,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         Splits conversation_ids by agent_kind and fetches from the appropriate
         endpoint (/api/conversations for LLM, /api/acp/conversations for ACP).
-
-        If a conversation is not registered with the agent-server (e.g., after
-        sandbox recreation via orchestrator /resume), automatically register it.
-        Only LLM conversations are auto-registered; ACP conversations are out
-        of scope for the resume flow.
+        Auto-registration of missing conversations happens at the
+        ``_build_app_conversations`` layer (see
+        ``_auto_register_missing_conversations``) so it runs even when this
+        method short-circuits on connection errors.
         """
         if not conversation_ids:
             return []
@@ -676,44 +680,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 response.raise_for_status()
                 data = response.json()
                 infos = _conversation_info_type_adapter.validate_python(data)
-                llm_results: list[ConversationInfo] = [c for c in infos if c]
-
-                # Auto-register conversations that are missing from the
-                # agent-server. Handles the case where the sandbox was resumed
-                # (via orchestrator) but the conversation was never registered
-                # with the new agent-server.
-                registered_ids = {str(c.id).replace('-', '') for c in llm_results}
-                missing_ids = [
-                    cid for cid in llm_ids
-                    if cid.replace('-', '') not in registered_ids
-                ]
-                if missing_ids and sandbox.status == SandboxStatus.RUNNING:
-                    for conv_id_str in missing_ids:
-                        try:
-                            conv_uuid = UUID(conv_id_str)
-                            conv_info = (
-                                await self.app_conversation_info_service
-                                .get_app_conversation_info(conv_uuid)
-                            )
-                            if conv_info and conv_info.created_by_user_id:
-                                _logger.info(
-                                    f'Auto-registering conversation {conv_id_str} '
-                                    f'with agent-server (sandbox {sandbox.id} '
-                                    f'is RUNNING but conversation not registered)'
-                                )
-                                info = await self.resume_conversation(
-                                    conversation_id=conv_uuid,
-                                    sandbox_id=sandbox.id,
-                                    user_id=conv_info.created_by_user_id,
-                                )
-                                llm_results.append(info)
-                        except Exception as reg_err:
-                            _logger.warning(
-                                f'Failed to auto-register conversation '
-                                f'{conv_id_str}: {reg_err}'
-                            )
-
-                results.extend(llm_results)
+                results.extend(c for c in infos if c)
             except httpx.HTTPStatusError:
                 _logger.warning(
                     f'Error getting LLM conversation status from sandbox {sandbox.id}',
@@ -748,6 +715,51 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 )
 
         return results
+
+    async def _auto_register_missing_conversations(
+        self,
+        app_conversation_infos: Sequence[AppConversationInfo | None],
+        sandboxes_by_id: dict[str, SandboxInfo],
+        conversation_info_by_id: dict,
+    ) -> None:
+        """Auto-register conversations that have RUNNING sandboxes but no agent-server registration.
+
+        This handles the case where the sandbox was resumed (via orchestrator /resume)
+        but the conversation was never registered with the new agent-server instance.
+        Only LLM conversations are auto-registered; ACP conversations are out of
+        scope for the resume flow.
+        """
+        for app_info in app_conversation_infos:
+            if app_info is None:
+                continue
+            # Only for conversations with RUNNING sandbox but no live info
+            sandbox = sandboxes_by_id.get(app_info.sandbox_id)
+            if not sandbox or sandbox.status != SandboxStatus.RUNNING:
+                continue
+            if app_info.id in conversation_info_by_id:
+                continue
+            if not app_info.created_by_user_id:
+                continue
+            if getattr(app_info, 'agent_kind', 'llm') != 'llm':
+                continue
+
+            conv_id_str = app_info.id.hex if hasattr(app_info.id, 'hex') else str(app_info.id)
+            try:
+                _logger.info(
+                    f'Auto-registering conversation {conv_id_str} with agent-server '
+                    f'(sandbox {sandbox.id} is RUNNING but conversation not registered)'
+                )
+                info = await self.resume_conversation(
+                    conversation_id=app_info.id,
+                    sandbox_id=sandbox.id,
+                    user_id=app_info.created_by_user_id,
+                )
+                conversation_info_by_id[info.id] = info
+            except Exception as reg_err:
+                _logger.warning(
+                    f'Failed to auto-register conversation {conv_id_str}: {reg_err}'
+                )
+
 
     def _build_conversation(
         self,
