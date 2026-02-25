@@ -579,7 +579,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         sandbox: SandboxInfo,
         conversation_ids: list[str],
     ) -> list[ConversationInfo]:
-        """Get agent status for multiple conversations from the Agent Server."""
+        """Get agent status for multiple conversations from the Agent Server.
+
+        If a conversation is not registered with the agent-server (e.g., after sandbox
+        recreation via orchestrator /resume), automatically register it.
+        """
         try:
             # Build the URL with query parameters
             agent_server_url = self._get_agent_server_url(sandbox)
@@ -597,6 +601,37 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             data = response.json()
             conversation_info = _conversation_info_type_adapter.validate_python(data)
             conversation_info = [c for c in conversation_info if c]
+
+            # Auto-register conversations that are missing from the agent-server.
+            # This handles the case where the sandbox was resumed (via orchestrator)
+            # but the conversation was never registered with the new agent-server.
+            registered_ids = {str(c.id).replace('-', '') for c in conversation_info}
+            missing_ids = [
+                cid for cid in conversation_ids
+                if cid.replace('-', '') not in registered_ids
+            ]
+            if missing_ids and sandbox.status == SandboxStatus.RUNNING:
+                for conv_id_str in missing_ids:
+                    try:
+                        conv_uuid = UUID(conv_id_str)
+                        # Look up user_id from conversation info
+                        conv_info = await self.app_conversation_info_service.get_app_conversation_info(conv_uuid)
+                        if conv_info and conv_info.created_by_user_id:
+                            _logger.info(
+                                f'Auto-registering conversation {conv_id_str} with agent-server '
+                                f'(sandbox {sandbox.id} is RUNNING but conversation not registered)'
+                            )
+                            info = await self.resume_conversation(
+                                conversation_id=conv_uuid,
+                                sandbox_id=sandbox.id,
+                                user_id=conv_info.created_by_user_id,
+                            )
+                            conversation_info.append(info)
+                    except Exception as reg_err:
+                        _logger.warning(
+                            f'Failed to auto-register conversation {conv_id_str}: {reg_err}'
+                        )
+
             return conversation_info
         except httpx.HTTPStatusError:
             # The runtime API stops idle sandboxes all the time and they return a 404 or a 503.
