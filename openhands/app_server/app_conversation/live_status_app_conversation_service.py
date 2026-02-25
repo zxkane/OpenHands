@@ -498,11 +498,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         assert sandbox is not None, f'Sandbox {sandbox_id} not found after resume'
         agent_server_url = self._get_agent_server_url(sandbox)
 
-        # Get sandbox spec for working directory
+        # Get sandbox spec for working directory (may be None for old sandbox images)
         sandbox_spec = await self.sandbox_spec_service.get_sandbox_spec(
             sandbox.sandbox_spec_id
         )
-        assert sandbox_spec is not None, f'Sandbox spec {sandbox.sandbox_spec_id} not found'
+        working_dir = sandbox_spec.working_dir if sandbox_spec else '/workspace'
 
         # Build the conversation request with current user settings
         start_conversation_request = (
@@ -511,7 +511,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 initial_message=None,  # No initial message on resume
                 system_message_suffix=None,
                 git_provider=None,
-                working_dir=sandbox_spec.working_dir,
+                working_dir=working_dir,
                 agent_type=AgentType.DEFAULT,
                 llm_model=None,  # Use current user default
                 conversation_id=conversation_id,
