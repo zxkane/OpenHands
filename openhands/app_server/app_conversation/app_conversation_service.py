@@ -161,6 +161,23 @@ class AppConversationService(ABC):
         """
 
 
+    @abstractmethod
+    async def resume_conversation(
+        self,
+        conversation_id: UUID,
+        sandbox_id: str,
+        user_id: str,
+    ):
+        """Resume an archived conversation by registering it with the agent-server.
+
+        After the sandbox has been recreated (via orchestrator /resume), this method:
+        1. Waits for sandbox to be RUNNING
+        2. Builds a StartConversationRequest with current user settings
+        3. POSTs to agent-server /api/conversations to register the conversation
+        4. Sets up event callbacks
+        """
+
+
 class AppConversationServiceInjector(
     DiscriminatedUnionMixin, Injector[AppConversationService], ABC
 ):
