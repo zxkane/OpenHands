@@ -524,6 +524,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         body_json = start_conversation_request.model_dump(
             mode='json', context={'expose_secrets': True}
         )
+        resume_headers: dict[str, str] = (
+            {'X-Session-API-Key': sandbox.session_api_key}
+            if sandbox.session_api_key
+            else {}
+        )
         max_retries = 5
         retry_delay = 2.0
         for attempt in range(max_retries):
@@ -531,7 +536,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 response = await self.httpx_client.post(
                     f'{agent_server_url}/api/conversations',
                     json=body_json,
-                    headers={'X-Session-API-Key': sandbox.session_api_key},
+                    headers=resume_headers,
                     timeout=self.sandbox_startup_timeout,
                 )
                 response.raise_for_status()
@@ -559,15 +564,17 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 )
             )
 
-        # Set security analyzer from settings
+        # Set security analyzer from settings (skip if user has no preference)
         user = await self.user_context.get_user_info()
-        await self._set_security_analyzer_from_settings(
-            agent_server_url,
-            sandbox.session_api_key,
-            info.id,
-            user.security_analyzer,
-            self.httpx_client,
-        )
+        security_analyzer = getattr(user, 'security_analyzer', None)
+        if security_analyzer is not None:
+            await self._set_security_analyzer_from_settings(
+                agent_server_url,
+                sandbox.session_api_key,
+                info.id,
+                security_analyzer,
+                self.httpx_client,
+            )
 
         _logger.info(f'Conversation {conversation_id} resumed and registered with agent-server')
         return info
@@ -639,6 +646,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         Splits conversation_ids by agent_kind and fetches from the appropriate
         endpoint (/api/conversations for LLM, /api/acp/conversations for ACP).
+
+        If a conversation is not registered with the agent-server (e.g., after
+        sandbox recreation via orchestrator /resume), automatically register it.
+        Only LLM conversations are auto-registered; ACP conversations are out
+        of scope for the resume flow.
         """
         if not conversation_ids:
             return []
@@ -664,7 +676,44 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 response.raise_for_status()
                 data = response.json()
                 infos = _conversation_info_type_adapter.validate_python(data)
-                results.extend(c for c in infos if c)
+                llm_results: list[ConversationInfo] = [c for c in infos if c]
+
+                # Auto-register conversations that are missing from the
+                # agent-server. Handles the case where the sandbox was resumed
+                # (via orchestrator) but the conversation was never registered
+                # with the new agent-server.
+                registered_ids = {str(c.id).replace('-', '') for c in llm_results}
+                missing_ids = [
+                    cid for cid in llm_ids
+                    if cid.replace('-', '') not in registered_ids
+                ]
+                if missing_ids and sandbox.status == SandboxStatus.RUNNING:
+                    for conv_id_str in missing_ids:
+                        try:
+                            conv_uuid = UUID(conv_id_str)
+                            conv_info = (
+                                await self.app_conversation_info_service
+                                .get_app_conversation_info(conv_uuid)
+                            )
+                            if conv_info and conv_info.created_by_user_id:
+                                _logger.info(
+                                    f'Auto-registering conversation {conv_id_str} '
+                                    f'with agent-server (sandbox {sandbox.id} '
+                                    f'is RUNNING but conversation not registered)'
+                                )
+                                info = await self.resume_conversation(
+                                    conversation_id=conv_uuid,
+                                    sandbox_id=sandbox.id,
+                                    user_id=conv_info.created_by_user_id,
+                                )
+                                llm_results.append(info)
+                        except Exception as reg_err:
+                            _logger.warning(
+                                f'Failed to auto-register conversation '
+                                f'{conv_id_str}: {reg_err}'
+                            )
+
+                results.extend(llm_results)
             except httpx.HTTPStatusError:
                 _logger.warning(
                     f'Error getting LLM conversation status from sandbox {sandbox.id}',
