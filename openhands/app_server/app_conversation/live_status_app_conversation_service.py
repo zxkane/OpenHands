@@ -503,25 +503,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         info = ConversationInfo.model_validate(response.json())
 
-        # Set up event callbacks
-        processors = [SetTitleCallbackProcessor()]
-        for processor in processors:
-            await self.event_callback_service.save_event_callback(
-                EventCallback(
-                    conversation_id=info.id,
-                    processor=processor,
-                )
-            )
-
-        # Set security analyzer from settings
-        user = await self.user_context.get_user_info()
-        await self._set_security_analyzer_from_settings(
-            agent_server_url,
-            sandbox.session_api_key,
-            info.id,
-            user.security_analyzer,
-            self.httpx_client,
-        )
+        # Skip event callback and security analyzer setup for resumed conversations.
+        # These were already configured when the conversation was first created.
+        # Re-inserting causes duplicate key errors (autoflush on existing records).
 
         _logger.info(f'Conversation {conversation_id} resumed and registered with agent-server')
         return info
