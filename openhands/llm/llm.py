@@ -186,6 +186,15 @@ class LLM(RetryMixin, DebugMixin):
         elif 'gemini' in self.config.model.lower() and self.config.safety_settings:
             kwargs['safety_settings'] = self.config.safety_settings
 
+        # For Bedrock models with unknown max_output_tokens, remove
+        # max_completion_tokens entirely so the Bedrock API uses the model's
+        # own maximum (which is the safest default for coding agents).
+        if (
+            self.config.model.startswith('bedrock/')
+            and self.config.max_output_tokens is None
+        ):
+            kwargs.pop('max_completion_tokens', None)
+
         # support AWS Bedrock provider
         kwargs['aws_region_name'] = self.config.aws_region_name
         if self.config.aws_access_key_id:
@@ -505,6 +514,33 @@ class LLM(RetryMixin, DebugMixin):
             # noinspection PyBroadException
             except Exception:
                 pass
+
+        # Bedrock cross-region inference profiles (e.g. bedrock/us.anthropic.claude-*)
+        # and versioned model IDs (e.g. bedrock/model-id:0) are not in litellm's
+        # model cost map.  Strip the region prefix and/or version suffix and retry.
+        if not self.model_info and self.config.model.startswith('bedrock/'):
+            _bedrock_id = self.config.model
+            # Strip cross-region prefix (us., eu., apac., global.)
+            import re
+
+            _stripped = re.sub(
+                r'^bedrock/(us|eu|apac|global)\.',
+                'bedrock/',
+                _bedrock_id,
+            )
+            if _stripped != _bedrock_id:
+                try:
+                    self.model_info = litellm.get_model_info(_stripped)
+                except Exception:
+                    pass
+            # Strip version suffix (:0, :1, etc.)
+            if not self.model_info:
+                _no_version = re.sub(r':\d+$', '', _stripped)
+                if _no_version != _stripped:
+                    try:
+                        self.model_info = litellm.get_model_info(_no_version)
+                    except Exception:
+                        pass
         from openhands.io import json
 
         logger.debug(
@@ -550,6 +586,20 @@ class LLM(RetryMixin, DebugMixin):
                     self.model_info['max_tokens'], int
                 ):
                     self.config.max_output_tokens = self.model_info['max_tokens']
+
+        # Bedrock models that are still missing max_output_tokens (e.g. DeepSeek,
+        # Kimi, GLM on Bedrock): leave max_output_tokens as None so that
+        # max_completion_tokens is omitted from the request.  The Bedrock API
+        # defaults to the model's own maximum when max_tokens is not provided,
+        # which is the safest behaviour for unknown models.
+        if self.config.max_output_tokens is None and self.config.model.startswith(
+            'bedrock/'
+        ):
+            logger.debug(
+                'Bedrock model %s has no known max_output_tokens — '
+                'omitting so the API uses the model default',
+                self.config.model,
+            )
 
         # Initialize function calling using centralized model features
         features = get_features(self.config.model)
