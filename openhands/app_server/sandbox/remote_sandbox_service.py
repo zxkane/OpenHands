@@ -58,6 +58,7 @@ STATUS_MAPPING = {
     'paused': SandboxStatus.PAUSED,
     'stopped': SandboxStatus.MISSING,
     'starting': SandboxStatus.STARTING,
+    'provisioning': SandboxStatus.STARTING,  # Fargate: task launched but not yet RUNNING
     'error': SandboxStatus.ERROR,
 }
 AGENT_SERVER_PORT = 60000
