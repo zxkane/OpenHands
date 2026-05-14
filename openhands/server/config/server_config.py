@@ -22,13 +22,13 @@ class ServerConfig(ServerConfigInterface):
     hide_llm_settings = os.environ.get('HIDE_LLM_SETTINGS', 'false') == 'true'
     # This config is used to hide the microagent management page from the users for now. We will remove this once we release the new microagent management page.
     settings_store_class: str = (
-        'openhands.app_server.settings.file_settings_store.FileSettingsStore'
+        'openhands.app_server.settings.s3_settings_store.CognitoS3SettingsStore'
     )
     secret_store_class: str = (
-        'openhands.app_server.secrets.file_secrets_store.FileSecretsStore'
+        'openhands.app_server.secrets.s3_secrets_store.CognitoS3SecretsStore'
     )
     user_auth_class: str = (
-        'openhands.app_server.user_auth.default_user_auth.DefaultUserAuth'
+        'openhands.app_server.user_auth.cognito_user_auth.CognitoUserAuth'
     )
     enable_v1: bool = os.getenv('ENABLE_V1') != '0'
 
