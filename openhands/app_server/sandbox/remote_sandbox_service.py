@@ -479,6 +479,16 @@ class RemoteSandboxService(SandboxService):
             # Prepare environment variables
             environment = await self._init_environment(sandbox_spec, sandbox_id)
 
+            # zxkane/openhands-infra fork: propagate USER_ID into the runtime
+            # API /start request so multi-tenant ownership tracking works in
+            # the Fargate sandbox orchestrator (it stamps the DynamoDB record
+            # and OpenResty later checks it for cross-user access denial).
+            # Without this, the DDB record falls back to user_id="anonymous"
+            # and OpenResty skips the ownership check, allowing any
+            # authenticated user to reach any runtime URL.
+            if user_id:
+                environment['USER_ID'] = user_id
+
             # Prepare start request
             start_request: dict[str, Any] = {
                 'image': sandbox_spec.id,  # Use sandbox_spec.id as the container image
